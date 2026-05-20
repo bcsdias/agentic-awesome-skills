@@ -63,7 +63,7 @@ Most users should start with the full library install and use bundles or workflo
 npx antigravity-awesome-skills
 ```
 
-The npm installer uses a shallow clone by default so first-run installs stay lighter than a full repository history checkout.
+The npm installer uses a shallow, release-pinned clone by default so first-run installs stay lighter than a full repository history checkout while matching the published npm package version. Use `--tag main` only when you intentionally want the current repository tip.
 
 ### Verify the install
 
