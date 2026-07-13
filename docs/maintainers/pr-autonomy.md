@@ -61,19 +61,25 @@ A successful `manual-review-required` check means only that the requirement was 
 7. rejects operational errors, malformed evidence, incomplete snapshots, score-component regressions, provenance identity regressions, or any other deterministic blocker;
 8. re-reads both pull-request base and head before and after approval and immediately before merge.
 
-A real merge also requires effective server-side protection for `main`: nonempty strict status checks, enforcement for administrators, no applicable ruleset bypass actors, and no merge queue. If that enforcement cannot be proven, `merge:batch` refuses non-dry-run operation. Base drift is never retried with stale evidence; the batch must be rerun from the new tuple. Pre-existing auto-merge state is rejected, and the immediate GitHub merge endpoint must return `merged: true` before post-merge work begins.
+A real merge also requires effective server-side protection for `main`: the four exact GitHub-Actions-owned checks (`pr-policy`, `pr-evidence`, `source-validation`, and `artifact-preview`), strict up-to-date enforcement, pull-request-only changes, administrator enforcement, no applicable ruleset bypass actors, and no merge queue. If that enforcement cannot be proven, `merge:batch` refuses non-dry-run operation. Base drift is never retried with stale evidence; the batch must be rerun from the new tuple. Pre-existing auto-merge state is rejected, and the immediate GitHub merge endpoint must return `merged: true` before post-merge work begins.
 
 For canonical `SKILL.md` or allowlisted supporting skill-content changes, the maintainer supplies `--reviewed-head <full-sha>`. A stale, abbreviated, or mismatched SHA fails closed. The Skill Review check itself is required only for `SKILL.md` changes because that workflow is path-filtered; support-only changes still require the exact-SHA human attestation.
 
 Deletions, copies, ambiguous moves, and all canonical skill-content changes remain manual-only in this stage even when deterministic evidence contains no regression. A passing ratchet is not semantic approval and never makes a skill eligible for automatic merge.
+
+## Protected Canonical Sync
+
+Generated artifacts and contributor credits no longer write directly to `main`. Push and scheduled maintenance workflows regenerate the repository state without persisted checkout credentials, reject any unmanaged drift, and maintain one bot PR from `automation/canonical-repo-state`.
+
+Because GitHub suppresses ordinary workflow recursion for PRs created with `GITHUB_TOKEN`, the trusted writer explicitly dispatches the four required checks on the bot branch. That dispatch is accepted only on the exact branch, only for files declared by the generated-files contract, and only when rerunning `sync:repo-state` produces the exact full Git tree. A trusted waiter binds the open PR to its immutable head, verifies all four exact GitHub Actions checks, proves effective `main` protection, performs an immediate squash merge, and explicitly dispatches main CI, Pages, and CodeQL. It has no bypass around `main` protection.
 
 ## Later Phases
 
 Each phase requires evidence from the previous phase before activation:
 
 1. Observe shadow route accuracy and false-positive rates on real pull requests.
-2. Move direct-main CI, hygiene, contributor-sync, and release writers to bot pull requests or a narrowly scoped GitHub App.
-3. Protect `main` and require stable checks; remove routine human and bot direct pushes.
+2. Move remaining release writers to protected release pull requests; canonical CI, hygiene, and contributor-sync writers already use the bot pull-request lane.
+3. Keep `main` protected by stable app-bound checks and remove any newly introduced direct writer.
 4. Add schema-validated fork-safe semantic review whose privileged code always comes from the protected base.
 5. Build deterministic release-candidate pull requests with rendering separated from publication.
 6. Add immutable upstream commit/path/hash provenance and a delta-based exception ledger.

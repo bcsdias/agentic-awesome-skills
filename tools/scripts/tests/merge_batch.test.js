@@ -17,6 +17,7 @@ function makeCheckRun(name, status, conclusion, startedAt, id) {
     completed_at: startedAt,
     created_at: startedAt,
     id,
+    app: { id: 15368 },
   };
 }
 
@@ -78,8 +79,8 @@ function evidenceSnapshot(overrides = {}) {
 {
   const aliases = mergeBatch.getRequiredCheckAliases({ hasSkillChanges: true });
   assert.ok(aliases.some((entry) => !Array.isArray(entry) && entry.aliases.includes("review")));
-  assert.ok(aliases.some((entry) => Array.isArray(entry) && entry.includes("pr-policy")));
-  assert.ok(aliases.some((entry) => Array.isArray(entry) && entry.includes("pr-evidence")));
+  assert.ok(aliases.some((entry) => entry.aliases.includes("pr-policy")));
+  assert.ok(aliases.some((entry) => entry.aliases.includes("pr-evidence")));
 }
 
 {
@@ -102,6 +103,13 @@ function evidenceSnapshot(overrides = {}) {
 
   const latest = mergeBatch.selectLatestCheckRuns(runs);
   assert.strictEqual(latest.get("pr-policy").conclusion, "success");
+
+  const spoofed = { ...makeCheckRun("pr-policy", "completed", "success", "2026-04-01T10:20:00Z", 6), app: { id: 999 } };
+  assert.deepStrictEqual(
+    mergeBatch.summarizeRequiredCheckRuns([spoofed], [["pr-policy"]]).map((entry) => entry.state),
+    ["missing"],
+    "required checks must come from the GitHub Actions app",
+  );
 
   const skippedGate = makeCheckRun("pr-evidence", "completed", "skipped", "2026-04-01T10:13:00Z", 5);
   assert.deepStrictEqual(
@@ -501,16 +509,59 @@ function approvalDependencies(overrides = {}) {
 
 {
   const protection = {
-    required_status_checks: { strict: true, checks: [{ context: "pr-evidence", app_id: 1 }] },
+    required_status_checks: {
+      strict: true,
+      checks: ["pr-policy", "pr-evidence", "source-validation", "artifact-preview"].map((context) => ({
+        context,
+        app_id: 15368,
+      })),
+    },
     enforce_admins: { enabled: true },
+    required_pull_request_reviews: { required_approving_review_count: 0 },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false },
   };
   assert.strictEqual(mergeBatch.validateEffectiveMainProtection(protection, []), true);
   assert.throws(
     () => mergeBatch.validateEffectiveMainProtection(
-      { ...protection, required_status_checks: { strict: false, checks: [{ context: "pr-evidence" }] } },
+      { ...protection, required_status_checks: { strict: false, checks: protection.required_status_checks.checks } },
       [],
     ),
-    /strict up-to-date/,
+    /exact app-bound strict checks/,
+  );
+  assert.throws(
+    () => mergeBatch.validateEffectiveMainProtection(
+      { ...protection, required_status_checks: { strict: true, checks: [{ context: "pr-policy", app_id: 15368 }] } },
+      [],
+    ),
+    /exact app-bound strict checks/,
+  );
+  assert.throws(
+    () => mergeBatch.validateEffectiveMainProtection(
+      { ...protection, required_pull_request_reviews: null },
+      [],
+    ),
+    /through pull requests/,
+  );
+  assert.throws(
+    () => mergeBatch.validateEffectiveMainProtection(
+      { ...protection, allow_force_pushes: null },
+      [],
+    ),
+    /disable force pushes/,
+  );
+  assert.throws(
+    () => mergeBatch.validateEffectiveMainProtection(
+      {
+        ...protection,
+        required_pull_request_reviews: {
+          required_approving_review_count: 0,
+          bypass_pull_request_allowances: { apps: [{ id: 1 }] },
+        },
+      },
+      [],
+    ),
+    /bypass allowances/,
   );
   assert.throws(
     () => mergeBatch.validateEffectiveMainProtection(
@@ -576,7 +627,16 @@ function approvalDependencies(overrides = {}) {
     runGhApiJson(_root, args, options = {}) {
       calls.push([args[0], options]);
       if (args[0].endsWith("/branches/main/protection")) {
-        return { required_status_checks: { strict: true, checks: [{ context: "ci" }] }, enforce_admins: { enabled: true } };
+        return {
+          required_status_checks: {
+            strict: true,
+            checks: ["pr-policy", "pr-evidence", "source-validation", "artifact-preview"].map((context) => ({ context, app_id: 15368 })),
+          },
+          enforce_admins: { enabled: true },
+          required_pull_request_reviews: { required_approving_review_count: 0 },
+          allow_force_pushes: { enabled: false },
+          allow_deletions: { enabled: false },
+        };
       }
       if (args[0].includes("/rulesets?")) {
         return [[{ id: 101 }], [{ id: 202 }]];

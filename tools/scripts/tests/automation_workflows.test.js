@@ -147,7 +147,7 @@ assert.match(
 );
 assert.match(
   ciWorkflow,
-  /source-validation:[\s\S]*?- name: Fetch base branch[\s\S]*?run: git fetch origin "\$\{\{ github\.base_ref \}\}"/,
+  /source-validation:[\s\S]*?- name: Fetch base branch[\s\S]*?run: git fetch origin "\$\{\{ github\.base_ref \|\| 'main' \}\}"/,
   "source-validation should fetch the PR base branch before changed-skill README credit checks",
 );
 assert.match(
@@ -187,8 +187,28 @@ assert.doesNotMatch(
 );
 assert.match(
   ciWorkflow,
-  /git commit -m "chore: sync repo state \[ci skip\]"/,
-  "main CI should keep bot-generated canonical sync commits out of the normal CI loop",
+  /uses: peter-evans\/create-pull-request@[a-f0-9]{40}/,
+  "main CI should publish canonical drift through a pinned pull-request action",
+);
+assert.match(
+  ciWorkflow,
+  /branch: automation\/canonical-repo-state/,
+  "main CI should maintain one fixed canonical-sync branch",
+);
+assert.match(
+  ciWorkflow,
+  /gh workflow run ci\.yml --ref "\$PR_BRANCH" -f canonical_sync_pr=true/,
+  "main CI should explicitly dispatch required checks for GITHUB_TOKEN-created PRs",
+);
+assert.match(
+  ciWorkflow,
+  /- name: Reproduce canonical-sync PR from main[\s\S]*?GH_TOKEN: \$\{\{ github\.token \}\}[\s\S]*?run: npm run sync:repo-state/,
+  "canonical reproducibility should scope a read token to contributor synchronization",
+);
+assert.doesNotMatch(
+  ciWorkflow,
+  /git push origin (?:HEAD|main)/,
+  "main CI must not push directly to protected main",
 );
 assert.match(
   ciWorkflow,
@@ -237,8 +257,18 @@ assert.match(
 );
 assert.match(
   hygieneWorkflow,
-  /git commit -m "chore: scheduled repo hygiene sync \[ci skip\]"/,
-  "repo hygiene workflow should keep bot-generated sync commits out of the normal CI loop",
+  /uses: peter-evans\/create-pull-request@[a-f0-9]{40}/,
+  "repo hygiene should publish canonical drift through a pinned pull-request action",
+);
+assert.match(
+  hygieneWorkflow,
+  /gh workflow run ci\.yml --ref "\$PR_BRANCH" -f canonical_sync_pr=true/,
+  "repo hygiene should explicitly dispatch required checks for GITHUB_TOKEN-created PRs",
+);
+assert.doesNotMatch(
+  hygieneWorkflow,
+  /git push origin (?:HEAD|main)/,
+  "repo hygiene must not push directly to protected main",
 );
 assert.match(
   hygieneWorkflow,
@@ -288,6 +318,16 @@ assert.ok(
   prepareReleaseBlock.indexOf('["run", "sync:metadata", "--", "--refresh-volatile"]') <
     prepareReleaseBlock.indexOf("runReleaseSuite(projectRoot)"),
   "release preparation should refresh volatile metadata before generating canonical release artifacts",
+);
+assert.match(
+  releaseWorkflowScript,
+  /const releaseBranch = `release\/v\$\{version\}`/,
+  "release preparation should use a protected release branch",
+);
+assert.doesNotMatch(
+  releaseWorkflowScript,
+  /\["push", "origin", "main"\]/,
+  "release tooling must not push directly to protected main",
 );
 assert.match(
   publishWorkflow,

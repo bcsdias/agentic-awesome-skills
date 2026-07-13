@@ -20,7 +20,7 @@ There are 5 things that usually fail/get forgotten. **DO NOT FORGET THEM:**
 Committing is NOT enough. You must PUSH to the remote.
 
 - **BAD**: `git commit -m "feat: new skill"` (User sees nothing)
-- **GOOD**: `git commit -m "..." && git push origin main`
+- **GOOD**: `git commit -m "..." && git push -u origin <topic-branch>` followed by a protected pull request
 
 ### 2. 🔄 SYNC GENERATED FILES (Avoid CI Drift)
 
@@ -144,10 +144,10 @@ Before ANY commit that adds/modifies skills, run the chain:
     git add README.md skills_index.json data/skills_index.json data/catalog.json data/bundles.json data/aliases.json CATALOG.md
     git commit -m "chore: sync generated files"
     ```
-    > 🔴 **CRITICAL for direct `main` work**: If you skip this on maintainer work that lands directly on `main`, CI will fail with "Detected uncommitted changes".
+    > 🔴 **CRITICAL for maintainer pull requests**: If you skip this, CI may detect canonical drift after merge and open a follow-up bot PR. Do not bypass protected `main`.
     > For contributor PRs, do **not** include derived registry artifacts. CI blocks direct edits to those files and previews drift separately.
     > See [`docs/maintainers/ci-drift-fix.md`](../docs/maintainers/ci-drift-fix.md) for details.
-    > `main` may still auto-commit canonical artifacts with `[ci skip]`, but only within the generated-files contract. If the sync leaves unmanaged drift, the workflow must fail instead of pushing a partial fix.
+    > Protected `main` never receives an automatic direct push. Canonical drift is published through the fixed `automation/canonical-repo-state` PR only when it stays inside the generated-files contract; unmanaged drift fails closed.
 
 ### B. When You Merge a PR (Step-by-Step)
 
@@ -397,11 +397,11 @@ Preflight verification → Changelog → `npm run release:prepare -- X.Y.Z` → 
     npm run validate:strict
     ```
 2.  **Update Changelog**: Add the new release section to `CHANGELOG.md`.
-3.  **Prepare commit and tag locally**:
+3.  **Prepare the protected release PR**:
     ```bash
     npm run release:prepare -- X.Y.Z
     ```
-    This validates the release, aligns versioned files, writes the release notes artifact, creates the release commit, and creates the local tag.
+    This validates the release, aligns versioned files, writes the release notes artifact, creates the release commit on `release/vX.Y.Z`, pushes it, and opens the protected release PR. The tag is created only after that exact PR is merged.
 4.  **Create GitHub Release** (REQUIRED):
 
     > ⚠️ **CRITICAL**: Pushing a tag (`git push --tags`) is NOT enough. You must create a **GitHub Release Object** for it to appear in the sidebar and trigger the NPM publish workflow.

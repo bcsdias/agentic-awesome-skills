@@ -22,12 +22,19 @@ const BASE_BRANCH_MODIFIED_PATTERNS = [
   /branch was modified/i,
 ];
 const REQUIRED_CHECKS = [
-  ["pr-policy", ["pr-policy"]],
-  ["pr-evidence", ["pr-evidence"]],
-  ["source-validation", ["source-validation"]],
-  ["artifact-preview", ["artifact-preview"]],
+  ["pr-policy", { label: "pr-policy", aliases: ["pr-policy"], appId: 15368 }],
+  ["pr-evidence", { label: "pr-evidence", aliases: ["pr-evidence"], appId: 15368 }],
+  ["source-validation", { label: "source-validation", aliases: ["source-validation"], appId: 15368 }],
+  ["artifact-preview", { label: "artifact-preview", aliases: ["artifact-preview"], appId: 15368 }],
 ];
-const SKILL_REVIEW_REQUIRED = ["review", "Skill Review & Optimize", "Skill Review & Optimize / review"];
+const REQUIRED_PROTECTION_CHECKS = new Map(REQUIRED_CHECKS.map(([name, spec]) => [name, spec.appId]));
+const GITHUB_ACTIONS_APP_ID = 15368;
+const SKILL_REVIEW_REQUIRED = [
+  "review",
+  "Skill Review / review",
+  "Skill Review & Optimize",
+  "Skill Review & Optimize / review",
+];
 const MANUAL_REVIEW_REQUIRED = ["manual-review-required", "Skill Review / manual-review-required"];
 const DISALLOWED_COAUTHOR_TRAILER_PATTERNS = [
   /<noreply@anthropic\.com>/i,
@@ -684,15 +691,32 @@ function assertUnchangedTuple(prDetails, expected, phase, prNumber) {
 
 function validateEffectiveMainProtection(protection, rulesets = []) {
   const required = protection?.required_status_checks;
-  const checks = [
-    ...(Array.isArray(required?.checks) ? required.checks : []),
-    ...(Array.isArray(required?.contexts) ? required.contexts : []),
-  ];
-  if (required?.strict !== true || checks.length === 0) {
-    throw new Error("main protection must require nonempty strict up-to-date status checks.");
+  const checks = Array.isArray(required?.checks) ? required.checks : [];
+  const configured = new Map(checks.map((check) => [String(check?.context || ""), Number(check?.app_id)]));
+  const invalidChecks = [...REQUIRED_PROTECTION_CHECKS].filter(
+    ([context, appId]) => configured.get(context) !== appId,
+  );
+  if (required?.strict !== true || invalidChecks.length > 0) {
+    throw new Error(
+      "main protection must require the exact app-bound strict checks: " +
+      [...REQUIRED_PROTECTION_CHECKS.keys()].join(", "),
+    );
   }
   if (protection?.enforce_admins?.enabled !== true) {
     throw new Error("main protection must apply to administrators.");
+  }
+  if (!protection?.required_pull_request_reviews) {
+    throw new Error("main protection must require changes through pull requests.");
+  }
+  if (Number(protection.required_pull_request_reviews.required_approving_review_count) !== 0) {
+    throw new Error("main protection must not require routine approving reviews.");
+  }
+  const bypassAllowances = protection.required_pull_request_reviews.bypass_pull_request_allowances || {};
+  if (["users", "teams", "apps"].some((key) => Array.isArray(bypassAllowances[key]) && bypassAllowances[key].length > 0)) {
+    throw new Error("main pull-request protection must not have bypass allowances.");
+  }
+  if (protection?.allow_force_pushes?.enabled !== false || protection?.allow_deletions?.enabled !== false) {
+    throw new Error("main protection must disable force pushes and branch deletion.");
   }
   const applicableRulesets = rulesets.filter(rulesetAppliesToMain);
   const bypassing = applicableRulesets.filter((ruleset) =>
@@ -746,10 +770,12 @@ function getRequiredCheckAliases(prDetails, options = {}) {
     aliases.push({
       label: "review",
       aliases: SKILL_REVIEW_REQUIRED,
+      appId: GITHUB_ACTIONS_APP_ID,
       acceptedConclusions: ["success"],
       alternatives: options.allowManualReview
         ? [{
             aliases: MANUAL_REVIEW_REQUIRED,
+            appId: GITHUB_ACTIONS_APP_ID,
             acceptedConclusions: ["success"],
           }]
         : [],
@@ -790,9 +816,9 @@ function selectLatestCheckRuns(checkRuns) {
   return byName;
 }
 
-function checkRunMatchesAliases(checkRun, aliases) {
+function checkRunMatchesAliases(checkRun, aliases, appId) {
   const name = String(checkRun?.name || "");
-  return aliases.some((alias) => name === alias || name.endsWith(` / ${alias}`));
+  return Number(checkRun?.app?.id) === Number(appId) && aliases.some((alias) => name === alias);
 }
 
 function normalizeRequiredCheckSpec(requiredCheck) {
@@ -803,6 +829,7 @@ function normalizeRequiredCheckSpec(requiredCheck) {
       acceptedConclusions: ["success"],
       alternatives: [],
       blockingAliases: [],
+      appId: GITHUB_ACTIONS_APP_ID,
     };
   }
   if (!requiredCheck || typeof requiredCheck !== "object" || !Array.isArray(requiredCheck.aliases)) {
@@ -814,11 +841,12 @@ function normalizeRequiredCheckSpec(requiredCheck) {
     acceptedConclusions: requiredCheck.acceptedConclusions || ["success"],
     alternatives: Array.isArray(requiredCheck.alternatives) ? requiredCheck.alternatives : [],
     blockingAliases: Array.isArray(requiredCheck.blockingAliases) ? requiredCheck.blockingAliases : [],
+    appId: Number(requiredCheck.appId || GITHUB_ACTIONS_APP_ID),
   };
 }
 
-function summarizeCheckCandidate(latestRuns, aliases, acceptedConclusions) {
-  const candidates = latestRuns.filter((run) => checkRunMatchesAliases(run, aliases));
+function summarizeCheckCandidate(latestRuns, aliases, acceptedConclusions, appId = GITHUB_ACTIONS_APP_ID) {
+  const candidates = latestRuns.filter((run) => checkRunMatchesAliases(run, aliases, appId));
   if (!candidates.length) {
     return { state: "missing", conclusion: null, run: null };
   }
@@ -870,12 +898,12 @@ function summarizeRequiredCheckRuns(checkRuns, requiredAliases) {
   const latestRuns = [...latestByName.values()];
   for (const requiredCheck of requiredAliases) {
     const spec = normalizeRequiredCheckSpec(requiredCheck);
-    const blocker = summarizeCheckCandidate(latestRuns, spec.blockingAliases, []);
+    const blocker = summarizeCheckCandidate(latestRuns, spec.blockingAliases, [], spec.appId);
     if (blocker.state === "failed" || blocker.state === "pending") {
       summaries.push({ label: spec.label, ...blocker });
       continue;
     }
-    const primary = summarizeCheckCandidate(latestRuns, spec.aliases, spec.acceptedConclusions);
+    const primary = summarizeCheckCandidate(latestRuns, spec.aliases, spec.acceptedConclusions, spec.appId);
     if (primary.state === "success" || primary.state === "failed" || primary.state === "pending") {
       summaries.push({ label: spec.label, ...primary });
       continue;
@@ -887,6 +915,7 @@ function summarizeRequiredCheckRuns(checkRuns, requiredAliases) {
         latestRuns,
         alternative.aliases || [],
         alternative.acceptedConclusions || ["success"],
+        Number(alternative.appId || spec.appId),
       );
       if (candidate.state === "success") {
         alternativeSummary = candidate;
@@ -1211,43 +1240,6 @@ function gitPullMain(projectRoot) {
   runCommand("git", ["pull", "--ff-only", "origin", "main"], projectRoot);
 }
 
-function syncContributors(projectRoot) {
-  runCommand(
-    process.execPath,
-    [
-      path.join(projectRoot, "tools", "scripts", "run-python.js"),
-      path.join(projectRoot, "tools", "scripts", "sync_contributors.py"),
-    ],
-    projectRoot,
-  );
-}
-
-function commitAndPushReadmeIfChanged(projectRoot) {
-  const status = runCommand("git", ["status", "--porcelain", "--untracked-files=no"], projectRoot, {
-    capture: true,
-  });
-
-  if (!status) {
-    return { changed: false };
-  }
-
-  const lines = status.split(/\r?\n/).filter(Boolean);
-  const unexpected = lines.filter((line) => !line.includes("README.md"));
-  if (unexpected.length) {
-    throw new Error(`merge-batch expected sync:contributors to touch README.md only. Unexpected drift: ${unexpected.join(", ")}`);
-  }
-
-  runCommand("git", ["add", "README.md"], projectRoot);
-  const staged = runCommand("git", ["diff", "--cached", "--name-only"], projectRoot, { capture: true });
-  if (!staged.includes("README.md")) {
-    return { changed: false };
-  }
-
-  runCommand("git", ["commit", "-m", "chore: sync contributor credits after merge batch"], projectRoot);
-  runCommand("git", ["push", "origin", "main"], projectRoot);
-  return { changed: true };
-}
-
 async function mergePullRequest(projectRoot, repoSlug, prNumber, options) {
   const template = loadPullRequestTemplate(projectRoot);
   let prDetails = loadPullRequestDetails(projectRoot, repoSlug, prNumber);
@@ -1325,12 +1317,8 @@ async function mergePullRequest(projectRoot, repoSlug, prNumber, options) {
 
   gitCheckoutMain(projectRoot);
   gitPullMain(projectRoot);
-  syncContributors(projectRoot);
-
-  const followUp = commitAndPushReadmeIfChanged(projectRoot);
-  if (followUp.changed) {
-    console.log(`[merge-batch] PR #${prNumber}: README follow-up committed and pushed.`);
-  }
+  const followUp = { changed: false, delegatedToCanonicalSync: true };
+  console.log(`[merge-batch] PR #${prNumber}: canonical artifacts and contributor credits delegated to the protected bot PR lane.`);
 
   return {
     prNumber,
@@ -1400,7 +1388,6 @@ module.exports = {
   buildSquashMergeSubject,
   checkRunMatchesAliases,
   closeAndReopenPr,
-  commitAndPushReadmeIfChanged,
   ensureOnMainAndClean,
   ensureTrustedMain,
   extractSummaryBlock,

@@ -1,11 +1,11 @@
 # Merge Batch
 
-`merge:batch` is the maintainer shortcut for merging multiple PRs in order while keeping the GitHub-only squash rule and the post-merge contributor sync.
+`merge:batch` is the maintainer shortcut for merging multiple PRs in order while keeping the GitHub-only squash rule and delegating generated follow-up work to the protected canonical-sync PR lane.
 
 ## Prerequisites
 
 - Start from a clean `main` that exactly matches `origin/main`.
-- For a real merge, require strict up-to-date branch protection with required checks, administrator enforcement, no applicable ruleset bypass actors, and no merge queue. Dry runs remain available without this server-side prerequisite.
+- For a real merge, require pull-request-only strict branch protection with the four exact GitHub-Actions-owned checks, administrator enforcement, no applicable ruleset bypass actors, and no merge queue. Dry runs remain available without this server-side prerequisite.
 - Make sure [`.github/MAINTENANCE.md`](../../.github/MAINTENANCE.md) is the governing policy.
 - Have `gh` authenticated with maintainer permissions.
 - Use this only for PRs that are already expected to merge; conflicting PRs still need the manual conflict playbook.
@@ -38,14 +38,14 @@ Use `--dry-run` to exercise local classification without approving a run or merg
 - approve fork runs waiting on `action_required` only when every path, mode, object, size, and workflow identity is allowlisted
 - wait for the fresh required checks on the current head SHA
 - call GitHub's immediate squash-merge endpoint and continue only when it reports `merged: true`
-- pull `main`, run `sync:contributors`, and push a README-only follow-up if needed
+- pull the protected `main`; its trusted workflow opens a canonical-sync bot PR for generated artifacts and contributor credits when needed
 
 ## What It Automates
 
 - PR body normalization against the repository template
 - stale PR metadata refresh
 - required-check polling for the current PR head
-- the post-merge contributor sync step
+- handoff of post-merge contributor and artifact drift to the canonical-sync PR lane
 
 ## What It Does Not Automate
 
